@@ -7,12 +7,15 @@ import re
 import nltk
 import urllib
 import os
+import logging
+import logging.config
 
 TOKEN = os.environ['TOKEN']
 URL = "https://api.telegram.org/bot{}/".format(TOKEN)
 DOWNLOAD_URL = "https://api.telegram.org/file/bot{}/".format(TOKEN)
 
 locations = dict()
+logging.config.fileConfig('config/logging.cfg')  # logfile config
 
 
 def get_url(url):
@@ -85,7 +88,7 @@ keyboard_color = ['blue','white','orange']
 def handle_updates(updates):
     message=''
     for update in updates["result"]:
-        print (update)
+        logging.info(update)
         if 'message' in update:
             message = update["message"]
             if 'location' in message:
@@ -110,9 +113,12 @@ def handle_photo(message):
     file = get_json_from_url(get_file_url)
 
     download_url = DOWNLOAD_URL+"{}".format(file["result"]["file_path"]) # We should index this data
-    print("***********************New Image*************************+")
-    print(locations[message["from"]["id"]])
-    print(download_url)
+    logging.info("***********************New Image*************************+")
+    if message["from"]["id"] in locations:
+        logging.info(locations[message["from"]["id"]])
+    else:
+        logging.error("No location point")
+    logging.info(download_url)
 
     #f = open(str(file_id)+".jpg", 'wb')
     #f.write(urllib.urlopen(download_url).read())
@@ -131,7 +137,7 @@ def handle_location(message, realtime):
     if not realtime:
         send_message("Great!",chat)
         send_message("Now, place your grating in front of the camera and take a photo", chat, keyboard)
-    print(message["location"])
+    logging.info(message["location"])
     locations[user_id] = message["location"]
 
 def handle_text(update):
@@ -185,14 +191,14 @@ def handle_text(update):
 
 
         except Exception as e:
-            print(e)
+            logging.error(e)
             try:
                 date = update["message"]["date"]
                 chat = update["message"]["chat"]["id"]
                 send_message('I do not understand your message',chat)
 
             except Exception as e:
-                print(e)
+                logging.error(e)
 
 def build_keyboard(items):
     keyboard = [[item] for item in items]
