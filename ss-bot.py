@@ -5,21 +5,23 @@ import urllib
 import time
 import re
 import nltk
-import urllib
 import os
 import logging
 import logging.config
 
-TOKEN = os.environ['TOKEN']
+TOKEN = "1290123918:AAHozYmKK3QNZ8dGMdkvaswYDHaNPUovqJE" #os.environ['TOKEN']
 URL = "https://api.telegram.org/bot{}/".format(TOKEN)
 DOWNLOAD_URL = "https://api.telegram.org/file/bot{}/".format(TOKEN)
 
+
 locations = dict()
-logging.config.fileConfig('config/logging.cfg')  # logfile config
+logging.config.fileConfig('ss-telegram-bot-master/config/logging.cfg')  # logfile config, logging.config.fileConfig('config/logging.cfg') si fuera de heroku
 
 status = dict()
 
 observations = dict()
+
+time_zone = None
 
 
 def get_url(url):
@@ -86,8 +88,10 @@ def send_message(text, chat_id, reply_markup=None):
 
 keyboard_wait = ['Let\'s go!','Más info sobre el proyecto','Denunciar incidencia','Salir']
 keyboard_menu = ['Let\'s go!','About','Help']
-keyboard_location = ['Take a photo']
-keyboard_color = ['white','orange']
+keyboard_time = ['Day','Night']
+#keyboard_location = ['Take a photo']
+keyboard_color_day = ['white','orange']
+keyboard_color_night = ['HPS', 'LPS', 'LED', 'MV', 'MH']
 
 def handle_updates(updates):
     message=''
@@ -134,19 +138,32 @@ def handle_photo(message):
         observations[user_id] = {"image_url": download_url+str(file_id)+".jpg","date":message["date"]}
 
     send_message("Thank you!", chat)
-    response_image = urllib.urlretrieve(download_url, str(file_id)+".jpg")
-    #send_message("Your image has been registered in our system", chat)
-    keyboard = build_reply_keyboard(keyboard_color)
-    send_message("What is the color of the light?", chat,keyboard)
+
+    try:
+
+        time_zone = observations[user_id]["time_zone"]
+        response_image = urllib.request.urlretrieve(download_url, str(file_id)+".jpg")
+        #send_message("Your image has been registered in our system", chat)
+        
+        if time_zone == "Day":
+            keyboard = build_reply_keyboard(keyboard_color_day)
+            send_message("What is the color of the light?", chat,keyboard)
+        elif time_zone == "Night":
+            keyboard = build_reply_keyboard(keyboard_color_night)
+            send_message("What is the type of light?", chat,keyboard)
 
 
+    except Exception as e:
+        logging.error(e)
+
+#TODO: Revisar si queremos que no pida la ubicacion mientras esta en tiempo real
 def handle_location(message, realtime):
     chat = message["chat"]["id"]
     user_id = message["from"]["id"]
-    keyboard = build_keyboard(keyboard_location)
+    keyboard = build_keyboard(keyboard_time)
     if not realtime:
         send_message("Great!",chat)
-        send_message("Now, place your grating in front of the camera and take a photo", chat, keyboard)
+        send_message("Next question, is it day or night now?", chat, keyboard)
     logging.info(message["location"])
     locations[user_id] = message["location"]
     if user_id in observations:
@@ -160,11 +177,15 @@ def handle_location(message, realtime):
     logging.info("location changed:"+str(observations[user_id]))
 
 def send_observation(user):
-    observation = {"datasource": "telegram", "userid": user, "observation": observations[user]}
 
-    response = requests.post("https://api.actionproject.eu/observations", json=observation)
+    logging.info(",".join(("{}={}".format(*i) for i in observations[user].items())))
 
-    logging.info(response)
+    #TODO: Descomentar para enviar a API
+    #observation = {"datasource": "telegram", "userid": user, "observation": observations[user]}
+
+    #response = requests.post("https://api.actionproject.eu/observations", json=observation)
+
+    #logging.info(response)
 
 def handle_text(update):
         try:
@@ -174,7 +195,7 @@ def handle_text(update):
             first_name = update["message"]["from"]["first_name"]
             user_id = update["message"]["from"]["id"]
 
-            text = text.encode('utf-8')
+            #text = text.encode('utf-8') Añade b' al inicio del string y da problemas al enviar el mensaje
 
             if text == "/start":
                 keyboard = build_keyboard(keyboard_menu)
@@ -202,11 +223,27 @@ def handle_text(update):
 
                 #reply_markup = {"keyboard": [["send_location"]],"request_location":True, "one_time_keyboard": True}
                 #keyboard = json.dumps(reply_markup)
-                send_message("Share your real time location with us by clicking in the clip button.",chat)
+                send_message("Share your location with us by clicking in the clip button.",chat)
 
-            if 'Take a photo' in text:
+            if text == 'Day':
+                #location_keyboard = telegram.KeyboardButton(text="send_location", request_location=True)
+
+                #reply_markup = {"keyboard": [["send_location"]],"request_location":True, "one_time_keyboard": True}
+                #keyboard = json.dumps(reply_markup)
+                observations[user_id]["time_zone"] = text
+                send_message("Awesome, you can take a photo now.",chat)
+           
+            if text == 'Night':
+                #location_keyboard = telegram.KeyboardButton(text="send_location", request_location=True)
+
+                #reply_markup = {"keyboard": [["send_location"]],"request_location":True, "one_time_keyboard": True}
+                #keyboard = json.dumps(reply_markup)
+                observations[user_id]["time_zone"] = text
+                send_message("Awesome, place your grating in front of the camera and take a photo.",chat)
+
+            #if 'Take a photo' in text:
                 #keyboard = build_keyboard(keyboard_location)
-                send_message("Now, place your grating in front of the camera and take a photo", chat)
+                #send_message("Now, place your grating in front of the camera and take a photo", chat)
 
             if text == 'About':
                 keyboard = build_keyboard(keyboard_menu)
@@ -214,9 +251,9 @@ def handle_text(update):
 
             if 'help' in text.lower():
                 keyboard = build_keyboard(keyboard_menu)
-                send_message('To use this bot, you have to activate your realtime location', chat)
+                send_message('To use this bot, you have to activate your location', chat)
                 send_message("and start to send images of the lamppost spectra", chat)
-                send_message("Do not forget to place the grating in front of the camera", chat, keyboard)
+                send_message("Do not forget to place the grating in front of the camera at night", chat, keyboard)
 
 
 
@@ -226,6 +263,16 @@ def handle_text(update):
                 observations[user_id] = observation
                 send_observation(user_id)
                 send_message("Your observation has been registered", chat)
+                send_message("Say Hi for a new one!", chat)
+
+            if text == 'HPS' or text =='LPS' or text =='LED' or text =='MH' or text =='MV':
+                observation = observations[user_id]
+                observation["color"] = text
+                observations[user_id] = observation
+                send_observation(user_id)
+                send_message("Your observation has been registered", chat)
+                send_message("Say Hi for a new one!", chat)
+                
 
 
         except Exception as e:
@@ -248,6 +295,7 @@ def build_reply_keyboard(items):
     reply_markup = {"keyboard":keyboard, "one_time_keyboard": True, "force_reply": True}
     return json.dumps(reply_markup)
 
+
 def main():
     last_update_id = None
     while True:
@@ -258,6 +306,6 @@ def main():
         time.sleep(0.5)
 
 
+
 if __name__ == '__main__':
     main()
-
