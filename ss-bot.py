@@ -5,9 +5,14 @@ import urllib
 import time
 import re
 import nltk
+import datetime
 import os
 import logging
 import logging.config
+
+from suntime import Sun, SunTimeException
+from timezonefinder import TimezoneFinder
+import pytz
 
 TOKEN = "1290123918:AAHozYmKK3QNZ8dGMdkvaswYDHaNPUovqJE" #os.environ['TOKEN']
 URL = "https://api.telegram.org/bot{}/".format(TOKEN)
@@ -86,10 +91,22 @@ def send_message(text, chat_id, reply_markup=None):
         url += "&reply_markup={}".format(reply_markup)
     get_url(url)
 
+def send_photo(caption, photo, chat_id, reply_markup=None):
+    caption.replace(" ","+")
+    url = URL + "sendPhoto?caption={}&photo={}&chat_id={}".format(caption, photo, chat_id)
+    if reply_markup:
+        url += "&reply_markup={}".format(reply_markup)
+    get_url(url)
+
+
 keyboard_wait = ['Let\'s go!','Más info sobre el proyecto','Denunciar incidencia','Salir']
 keyboard_menu = ['Let\'s go!','About','Help']
-keyboard_time = ['Day','Night']
-#keyboard_location = ['Take a photo']
+keyboard_tutorial = ['Start tutorial','Exit']
+keyboard_tutorial_step1 = ['Tip 1','Exit']
+keyboard_tutorial_step2 = ['Tip 2','Exit']
+keyboard_tutorial_finish = ['Finish']
+keyboard_new = ['Send a new one', "Finish"]
+keyboard_photo = ['This lamppost is of a different type than the previous one', "This lamppost is the same type as the previous one"]
 keyboard_color_day = ['white','orange']
 keyboard_color_night = ['HPS', 'LPS', 'LED', 'MV', 'MH']
 
@@ -102,6 +119,7 @@ def handle_updates(updates):
             if 'location' in message:
                 handle_location(message,False)
         if 'edited_message' in update:
+            logging.info("edited_message")
             message = update["edited_message"]
             if 'location' in message:
                 handle_location(message,True)
@@ -156,23 +174,55 @@ def handle_photo(message):
     except Exception as e:
         logging.error(e)
 
-#TODO: Revisar si queremos que no pida la ubicacion mientras esta en tiempo real
 def handle_location(message, realtime):
     chat = message["chat"]["id"]
     user_id = message["from"]["id"]
-    keyboard = build_keyboard(keyboard_time)
+    latitude = message["location"]["latitude"]
+    longitude = message["location"]["longitude"]
+
+    day = "Night"
+
+    #Get today sunrise and sunset
+    sun = Sun(latitude, longitude)
+    today_sr = int(sun.get_sunrise_time().strftime('%H'))
+    today_ss = int(sun.get_sunset_time().strftime('%H'))
+
+    #Get timezone
+    tf = TimezoneFinder()
+    timezone = tf.timezone_at(lng=longitude, lat=latitude) # returns 'Europe/Berlin'
+
+    #Get time
+    tz = pytz.timezone(timezone)
+    timezone_now = int(datetime.datetime.now(tz).strftime('%H'))
+
+    logging.info(str(timezone_now))
+    logging.info(str(today_sr))
+    logging.info(str(today_ss))
+
+    if timezone_now > today_sr and timezone_now < today_ss:
+        day = "Day"
+    else:
+        day = "Night"
+
     if not realtime:
         send_message("Great!",chat)
-        send_message("Next question, is it day or night now?", chat, keyboard)
+
+        if day == "Day":
+            send_message("Awesome, you can take a photo now.",chat)
+        else:
+            send_message("Awesome, place your grating in front of the camera and take a photo.",chat)
+
+
     logging.info(message["location"])
     locations[user_id] = message["location"]
     if user_id in observations:
         observation =  observations[user_id]
         observation["latitude"] = message["location"]["latitude"]
         observation["longitude"] = message["location"]["longitude"]
+        observations["time_zone"] = day
         observations[user_id] = observation
     else:
-        observations[user_id] = {"latitude":message["location"]["latitude"],"longitude":message["location"]["longitude"]}
+        observations[user_id] = {"latitude":message["location"]["latitude"],"longitude":message["location"]["longitude"], "time_zone":day}
 
     logging.info("location changed:"+str(observations[user_id]))
 
@@ -223,38 +273,68 @@ def handle_text(update):
 
                 #reply_markup = {"keyboard": [["send_location"]],"request_location":True, "one_time_keyboard": True}
                 #keyboard = json.dumps(reply_markup)
-                send_message("Share your location with us by clicking in the clip button.",chat)
-
-            if text == 'Day':
-                #location_keyboard = telegram.KeyboardButton(text="send_location", request_location=True)
-
-                #reply_markup = {"keyboard": [["send_location"]],"request_location":True, "one_time_keyboard": True}
-                #keyboard = json.dumps(reply_markup)
-                observations[user_id]["time_zone"] = text
-                send_message("Awesome, you can take a photo now.",chat)
-           
-            if text == 'Night':
-                #location_keyboard = telegram.KeyboardButton(text="send_location", request_location=True)
-
-                #reply_markup = {"keyboard": [["send_location"]],"request_location":True, "one_time_keyboard": True}
-                #keyboard = json.dumps(reply_markup)
-                observations[user_id]["time_zone"] = text
-                send_message("Awesome, place your grating in front of the camera and take a photo.",chat)
-
-            #if 'Take a photo' in text:
-                #keyboard = build_keyboard(keyboard_location)
-                #send_message("Now, place your grating in front of the camera and take a photo", chat)
+                send_message("Share your realtime location with us by clicking in the clip button.",chat)
 
             if text == 'About':
                 keyboard = build_keyboard(keyboard_menu)
                 send_message("This bot is an initiative of the ACTION project. With its help, you can map the lampposts of your city and collaborate to study the impact of the light pollution",chat)
 
             if 'help' in text.lower():
-                keyboard = build_keyboard(keyboard_menu)
+                keyboard = build_keyboard(keyboard_tutorial)
                 send_message('To use this bot, you have to activate your location', chat)
                 send_message("and start to send images of the lamppost spectra", chat)
                 send_message("Do not forget to place the grating in front of the camera at night", chat, keyboard)
 
+            if 'Start tutorial' in text:
+                keyboard = build_keyboard(keyboard_tutorial_step1)
+                send_message('This is a quick tutorial to help you identifying lampposts types', chat)
+                send_message("I will send you a few classified photos", chat, keyboard)
+
+            #TODO: Probar en servidor final
+            if 'Tip 1' in text:
+                keyboard = build_keyboard(keyboard_tutorial_step2)
+                send_message("I will start by sending you photos taken during the day", chat, keyboard)
+                send_photo("This is a white lamppost", 'ss-telegram-bot-master/assets/WHITE.png', chat)
+                send_photo("And this is an orange one",'ss-telegram-bot-master/assets/ORANGE.png', chat)
+
+            if 'Tip 2' in text:
+                keyboard = build_keyboard(keyboard_tutorial_finish)
+                send_message("Now I will send you photos taken during the night", chat, keyboard)
+                send_photo("This is a HPS lamppost", 'ss-telegram-bot-master/assets/HPS.png', chat)
+                send_photo("This is a LPS lamppost", 'ss-telegram-bot-master/assets/LPS.png', chat)
+                send_photo("This is a LED lamppost", 'ss-telegram-bot-master/assets/LED.png', chat)
+                send_photo("This is a MV lamppost", 'ss-telegram-bot-master/assets/MV.png', chat)
+                send_photo("And finally, this is a MH lamppost", 'ss-telegram-bot-master/assets/MH.png', chat)
+
+            if ('Exit' or 'Finish') in text:
+                keyboard = build_keyboard(keyboard_menu)
+                send_message('How can I help you?', chat, keyboard)
+
+            if 'Send a new one' in text:
+                
+                keyboard = build_keyboard(keyboard_photo)
+                send_message("Choose an option when you find a new lamppost.",chat, keyboard)
+
+            if 'Finish' in text:
+                
+                send_message("See you soon! Say Hi whenever you want to send new observations.",chat)
+
+            if 'This lamppost is of a different type than the previous one' in text:
+
+                time_zone = observations[user_id]["time_zone"]
+                
+                if time_zone == "Day":
+                    send_message("Awesome, you can take a photo now.",chat)
+                else:
+                    send_message("Awesome, place your grating in front of the camera and take a photo.",chat)
+
+                
+            if 'This lamppost is the same type as the previous one' in text:
+
+                send_observation(user_id)
+                keyboard = build_keyboard(keyboard_new)
+                send_message("Your observation has been registered", chat)
+                send_message("Do you want to send a new one?", chat, keyboard)
 
 
             if text == 'white' or text =='orange':
@@ -262,16 +342,18 @@ def handle_text(update):
                 observation["color"] = text
                 observations[user_id] = observation
                 send_observation(user_id)
+                keyboard = build_keyboard(keyboard_new)
                 send_message("Your observation has been registered", chat)
-                send_message("Say Hi for a new one!", chat)
+                send_message("Do you want to send a new one?", chat, keyboard)
 
             if text == 'HPS' or text =='LPS' or text =='LED' or text =='MH' or text =='MV':
                 observation = observations[user_id]
                 observation["color"] = text
                 observations[user_id] = observation
                 send_observation(user_id)
+                keyboard = build_keyboard(keyboard_new)
                 send_message("Your observation has been registered", chat)
-                send_message("Say Hi for a new one!", chat)
+                send_message("Do you want to send a new one?", chat, keyboard)
                 
 
 
@@ -309,3 +391,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
