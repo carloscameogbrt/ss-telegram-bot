@@ -1,6 +1,7 @@
 # coding=utf-8
 import json
 import requests
+import random
 import urllib
 import time
 import re
@@ -24,10 +25,9 @@ logging.config.fileConfig('ss-telegram-bot-master/config/logging.cfg')  # logfil
 
 status = dict()
 
-observations = dict()
-
 time_zone = None
 
+observations = dict()
 
 def get_url(url):
     response = requests.get(url)
@@ -100,12 +100,13 @@ def send_photo(caption, photo, chat_id, reply_markup=None):
 
 
 keyboard_wait = ['Let\'s go!','Más info sobre el proyecto','Denunciar incidencia','Salir']
-keyboard_menu = ['Let\'s go!','About','Help']
+keyboard_menu = ['Let\'s go!', 'Classify', 'About','Help']
 keyboard_tutorial = ['Start tutorial','Exit']
 keyboard_tutorial_step1 = ['Tip 1','Exit']
 keyboard_tutorial_step2 = ['Tip 2','Exit']
 keyboard_tutorial_finish = ['Finish']
 keyboard_new = ['Send a new one', "Finish"]
+keyboard_classify = ['Classify a new one', "Finish"]
 keyboard_photo = ['This lamppost is of a different type than the previous one', "This lamppost is the same type as the previous one"]
 keyboard_color_day = ['white','orange']
 keyboard_color_night = ['HPS', 'LPS', 'LED', 'MV', 'MH']
@@ -174,35 +175,17 @@ def handle_photo(message):
     except Exception as e:
         logging.error(e)
 
+
+#TODO: Asumimos que el usuario nos compartió su realtime. Si no lo hace o caduca, estaremos cogiendo
+# la última siempre hasta que vuelva a decir un Hi
+
 def handle_location(message, realtime):
     chat = message["chat"]["id"]
     user_id = message["from"]["id"]
     latitude = message["location"]["latitude"]
     longitude = message["location"]["longitude"]
 
-    day = "Night"
-
-    #Get today sunrise and sunset
-    sun = Sun(latitude, longitude)
-    today_sr = int(sun.get_sunrise_time().strftime('%H'))
-    today_ss = int(sun.get_sunset_time().strftime('%H'))
-
-    #Get timezone
-    tf = TimezoneFinder()
-    timezone = tf.timezone_at(lng=longitude, lat=latitude) # returns 'Europe/Berlin'
-
-    #Get time
-    tz = pytz.timezone(timezone)
-    timezone_now = int(datetime.datetime.now(tz).strftime('%H'))
-
-    logging.info(str(timezone_now))
-    logging.info(str(today_sr))
-    logging.info(str(today_ss))
-
-    if timezone_now > today_sr and timezone_now < today_ss:
-        day = "Day"
-    else:
-        day = "Night"
+    day = get_timezone(latitude, longitude)
 
     if not realtime:
         send_message("Great!",chat)
@@ -228,14 +211,28 @@ def handle_location(message, realtime):
 
 def send_observation(user):
 
+    logging.info("------- NEW OBSERVATION ------")
     logging.info(",".join(("{}={}".format(*i) for i in observations[user].items())))
 
     #TODO: Descomentar para enviar a API
-    #observation = {"datasource": "telegram", "userid": user, "observation": observations[user]}
 
+    #observation = {"datasource": "telegram", "userid": user, "observation": observations[user]}
+    
     #response = requests.post("https://api.actionproject.eu/observations", json=observation)
 
     #logging.info(response)
+
+def get_observation(user):
+
+    response = requests.get("https://api.actionproject.eu/observations")
+
+    response_json = json.loads(response.text)
+
+    logging.info(response_json)
+
+    rand_num = randrange(len(response_json))
+
+    return response_json[rand_num]
 
 def handle_text(update):
         try:
@@ -275,6 +272,29 @@ def handle_text(update):
                 #keyboard = json.dumps(reply_markup)
                 send_message("Share your realtime location with us by clicking in the clip button.",chat)
 
+            #Only send night photos for classifying  
+            if 'Classify' in text:
+                keyboard = build_keyboard(keyboard_color_night)
+                send_message('I will send you a photo for you to classify it', chat)
+
+                #TODO: revisar forma de acceder a la respuesta en funcion de la estructura de las observaciones
+                #to_classify = get_observation()["observation"]
+                #photo_url = to_classify['image']
+
+                to_classify = {"latitude": "40.416011","longitude": "-3.672166", "time_zone":"Night", "color": "HPS", "image_url": "https://streetspectra.actionproject.eu/wp-content/uploads/2020/02/action-street-spectra-5.jpeg" , "date":"1593951233", "classification": "yes"}
+                photo_url = "https://streetspectra.actionproject.eu/wp-content/uploads/2020/02/action-street-spectra-5.jpeg"
+                
+                send_photo("What is the type of light?", photo_url, chat, keyboard)
+
+                #TODO: estoy enviando las clasificaciones con el mismo formato de las observaciones con un POST y cambiando el user_id y el color que tenian
+                if user_id in observations:
+                    observation = observations[user_id]
+                    observation = to_classify
+                    observations[user_id] = observation
+                else:
+                    observations[user_id] = to_classify
+
+              
             if text == 'About':
                 keyboard = build_keyboard(keyboard_menu)
                 send_message("This bot is an initiative of the ACTION project. With its help, you can map the lampposts of your city and collaborate to study the impact of the light pollution",chat)
@@ -290,7 +310,7 @@ def handle_text(update):
                 send_message('This is a quick tutorial to help you identifying lampposts types', chat)
                 send_message("I will send you a few classified photos", chat, keyboard)
 
-            #TODO: Probar en servidor final
+            #TODO: Probar en servidor final, en heroku no carga las imagenes
             if 'Tip 1' in text:
                 keyboard = build_keyboard(keyboard_tutorial_step2)
                 send_message("I will start by sending you photos taken during the day", chat, keyboard)
@@ -316,7 +336,7 @@ def handle_text(update):
                 send_message("Choose an option when you find a new lamppost.",chat, keyboard)
 
             if 'Finish' in text:
-                
+                del observations[user_id]
                 send_message("See you soon! Say Hi whenever you want to send new observations.",chat)
 
             if 'This lamppost is of a different type than the previous one' in text:
@@ -347,14 +367,27 @@ def handle_text(update):
                 send_message("Do you want to send a new one?", chat, keyboard)
 
             if text == 'HPS' or text =='LPS' or text =='LED' or text =='MH' or text =='MV':
+
                 observation = observations[user_id]
-                observation["color"] = text
+
+                classification = 0 #0 for normal, 1 for cassification
+
+                if "classification" in observation:
+                    del observation["classification"]
+                    classification = 1
+
+                observation["color"] = text               
                 observations[user_id] = observation
+
                 send_observation(user_id)
-                keyboard = build_keyboard(keyboard_new)
                 send_message("Your observation has been registered", chat)
-                send_message("Do you want to send a new one?", chat, keyboard)
-                
+
+                if classification == 1:
+                    keyboard = build_keyboard(keyboard_classify)
+                    send_message("Do you want to classify a new one?", chat, keyboard)
+                else:
+                    keyboard = build_keyboard(keyboard_new)
+                    send_message("Do you want to send a new one?", chat, keyboard)
 
 
         except Exception as e:
@@ -366,6 +399,32 @@ def handle_text(update):
 
             except Exception as e:
                 logging.error(e)
+
+def get_timezone(latitude, longitude):
+    #Get today sunrise and sunset
+    sun = Sun(latitude, longitude)
+    today_sr = int(sun.get_sunrise_time().strftime('%H'))
+    today_ss = int(sun.get_sunset_time().strftime('%H'))
+
+    #Get timezone
+    tf = TimezoneFinder()
+    timezone = tf.timezone_at(lng=longitude, lat=latitude) # returns 'Europe/Berlin'
+
+    #Get time
+    tz = pytz.timezone(timezone)
+    timezone_now = int(datetime.datetime.now(tz).strftime('%H'))
+
+    logging.info(str(timezone_now))
+    logging.info(str(today_sr))
+    logging.info(str(today_ss))
+
+    if timezone_now > today_sr and timezone_now < today_ss:
+        day = "Day"
+    else:
+        day = "Night"
+
+    return day
+
 
 def build_keyboard(items):
     keyboard = [[item] for item in items]
@@ -391,4 +450,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
